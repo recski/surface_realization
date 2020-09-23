@@ -1,9 +1,10 @@
 import argparse
+import json
 import os
 import subprocess
 
 from surface import converter
-from surface import utils
+from surface.utils import get_conll_from_file
 from surface.grammar import GrammarClient
 
 
@@ -42,9 +43,12 @@ def surface_realization(grammar, args):
     rules, _ = converter.extract_rules(args.test_file, grammar.word_to_id)
     graphs, _, id_graphs = converter.convert(
         args.test_file, grammar.word_to_id)
-    conll = utils.get_conll_from_file(
-        args.test_file, grammar.word_to_id)
-    for i in range(len(rules)):
+
+    for i, sen in enumerate(gen_conll_sens_from_file(args.test_file)):
+        graph = get_dep_graph(sen)
+
+        #TODO lets use stanza sentences instead!
+
         print(f'processing sentence {i}...')
         grammar_fn, input_fn, output_fn = (
             os.path.join(args.gen_dir, fn) for fn in (
@@ -107,7 +111,7 @@ def gen_result_lines(sen_id, sen, ids):
             head_tok = old_id_to_tok[tok.head]
             head_id = tok_to_new_id[head_tok] + 1
 
-        new_tok = utils.Token(
+        new_tok = Token(
             new_id+1, tok.lemma, tok.word, tok.pos, tok.tpos, tok.misc,
             head_id, tok.deprel, tok.comp_edge, tok.space_after,
             tok.word_id)

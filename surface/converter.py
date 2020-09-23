@@ -1,5 +1,6 @@
 import sys
 import argparse
+import json
 import os
 import re
 from collections import defaultdict
@@ -291,6 +292,7 @@ def convert(conll_file, word_to_id):
         sen_id = 0
         for line in conll_file:
             if line == "\n":
+                print(json.dumps(graph_data))
                 graph = make_graph_string(graph_data, graph_root)
                 id_graph = make_id_graph(graph_data, graph_root, word_to_id)
                 graphs.append(graph)

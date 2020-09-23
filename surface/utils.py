@@ -29,16 +29,7 @@ Token = namedtuple('Token', [
     'comp_edge', 'space_after', 'word_id'])
 
 
-def fields_to_token(fields, word_to_id):
-    assert len(fields) == 10
-    lemma = fields[1]
-    fields.append(word_to_id[lemma.lower()])
-    fields[0] = int(fields[0])
-    fields[6] = int(fields[6])
-    return Token(*fields)
-
-
-def get_sens(stream):
+def gen_tsv_sens(stream):
     curr_sen = []
     for raw_line in stream:
         line = raw_line.strip()
@@ -51,8 +42,16 @@ def get_sens(stream):
         curr_sen.append(line.split('\t'))
 
 
-def get_conll_from_file(fn, word_to_id):
+def get_conll_sen(sen):
+    tokens = []
+    for fields in sen:
+        assert len(fields) == 10
+        fields[0] = int(fields[0])
+        fields[6] = int(fields[6])
+        tokens.append(Token(*fields))
+
+
+def get_conll_sens_from_file(fn):
     with open(fn, "r") as f:
-        return [
-            [fields_to_token(fields, word_to_id) for fields in sen]
-            for sen in get_sens(f)]
+        for sen in gen_tsv_sens(f):
+            yield get_conll_sen(sen)
