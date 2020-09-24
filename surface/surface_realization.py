@@ -1,10 +1,10 @@
 import argparse
-import json
 import os
 import subprocess
 
-from surface import converter
-from surface.utils import get_conll_from_file
+from surface.utils import create_alto_input
+from surface.utils import gen_conll_sens_from_file
+from surface.utils import get_graph, get_isi_sgraph, get_rules
 from surface.grammar import GrammarClient
 
 
@@ -39,53 +39,49 @@ def get_alto_command(timeout, input_fn, grammar_fn, output_fn):
         '-o', output_fn]
 
 
-def surface_realization(grammar, args):
-    rules, _ = converter.extract_rules(args.test_file, grammar.word_to_id)
-    graphs, _, id_graphs = converter.convert(
-        args.test_file, grammar.word_to_id)
+def surface_realization(sen, i, grammar, args):
+    """expects stanza Sentence, surface.Grammar, args"""
 
-    for i, sen in enumerate(gen_conll_sens_from_file(args.test_file)):
-        graph = get_dep_graph(sen)
+    graph, root_id = get_graph(sen, grammar.word_to_id)
+    isi_sgraph = get_isi_sgraph(graph, root_id)
+    rules = get_rules(graph)
 
-        #TODO lets use stanza sentences instead!
+    grammar_fn, input_fn, output_fn = (
+        os.path.join(args.gen_dir, fn) for fn in (
+            f'{i}.irtg', f'{i}.input', f'{i}.output'))
 
-        print(f'processing sentence {i}...')
-        grammar_fn, input_fn, output_fn = (
-            os.path.join(args.gen_dir, fn) for fn in (
-                f'{i}.irtg', f'{i}.input', f'{i}.output'))
-        utils.set_parse(input_fn, id_graphs[i])
+    create_alto_input(input_fn, isi_sgraph)
+
+    grammar_lines = grammar.get_grammar_lines(
+        rules, sen, args.max_subset_size)
+    with open(grammar_fn, 'w') as grammar_f:
+        grammar_f.write("\n".join(grammar_lines))
+    command = get_alto_command(
+        args.timeout, input_fn, grammar_fn, output_fn)
+    cproc = subprocess.run(command)
+    if cproc.returncode == 124:
+        print(f'sen {i} timed out, falling back to binary grammar')
+        grammar_fn = f'{i}_bin.irtg'
         grammar_lines = grammar.get_grammar_lines(
-            rules[i], conll[i], args.max_subset_size)
+            rules, sen, args.max_subset_size, binary=True)
         with open(grammar_fn, 'w') as grammar_f:
             grammar_f.write("\n".join(grammar_lines))
         command = get_alto_command(
-            args.timeout, input_fn, grammar_fn, output_fn)
+            args.timeout_bin, input_fn, grammar_fn, output_fn)
         cproc = subprocess.run(command)
         if cproc.returncode == 124:
-            print(f'sen {i} timed out, falling back to binary grammar')
-            grammar_fn = f'{i}_bin.irtg'
-            grammar_lines = grammar.get_grammar_lines(
-                rules[i], conll[i], args.max_subset_size, binary=True)
-            with open(grammar_fn, 'w') as grammar_f:
-                grammar_f.write("\n".join(grammar_lines))
-            command = get_alto_command(
-                args.timeout_bin, input_fn, grammar_fn, output_fn)
-            cproc = subprocess.run(command)
-            if cproc.returncode == 124:
-                print(f'sen {i} timed out again, skipping')
-                yield conll[i], None
-                continue
-        elif cproc.returncode != 0:
-            print(f'alto error on sentence {i}, skipping')
-            yield conll[i], None
-            continue
+            print(f'sen {i} timed out again, skipping')
+            return
+    elif cproc.returncode != 0:
+        print(f'alto error on sentence {i}, skipping')
+        return
 
-        try:
-            pred_ids = utils.get_ids_from_parse(output_fn)
-            yield conll[i], pred_ids
-        except IndexError:
-            print(f'no parse for sentence {i}, skipping')
-            yield conll[i], None
+    try:
+        pred_ids = utils.get_ids_from_parse(output_fn)
+        return pred_ids
+    except IndexError:
+        print(f'no parse for sentence {i}, skipping')
+        return
 
 
 def orig_order(toks):
@@ -125,9 +121,12 @@ def main():
     assert os.path.isdir(args.gen_dir)
     grammar = GrammarClient(f"{args.host}:{args.port}")
     with open(args.output_file, "w") as f:
-        for sen_id, (sen, pred_ids) in enumerate(
-                surface_realization(grammar, args)):
-            f.write("\n".join(gen_result_lines(sen_id, sen, pred_ids)))
+        for i, sen in enumerate(
+                gen_conll_sens_from_file(args.test_file, swaps=((1,2)))):
+            print(f'processing sentence {i}...')
+            for sen_id, pred_ids in enumerate(
+                    surface_realization(sen, i, grammar, args)):
+                f.write("\n".join(gen_result_lines(sen_id, sen, pred_ids)))
 
 
 if __name__ == "__main__":
