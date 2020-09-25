@@ -2,10 +2,16 @@ import argparse
 import os
 import subprocess
 
-from surface.utils import create_alto_input
-from surface.utils import gen_conll_sens_from_file
-from surface.utils import get_graph, get_isi_sgraph, get_rules
 from surface.grammar import GrammarClient
+from surface.utils import (
+    create_alto_input,
+    gen_conll_sens_from_file,
+    get_graph,
+    get_ids_from_parse,
+    get_isi_sgraph,
+    get_rules,
+    print_conll_sen,
+    reorder_sentence)
 
 
 def get_args():
@@ -77,7 +83,7 @@ def surface_realization(sen, i, grammar, args):
         return
 
     try:
-        pred_ids = utils.get_ids_from_parse(output_fn)
+        pred_ids = get_ids_from_parse(output_fn)
         return pred_ids
     except IndexError:
         print(f'no parse for sentence {i}, skipping')
@@ -86,34 +92,7 @@ def surface_realization(sen, i, grammar, args):
 
 def orig_order(toks):
     return sorted(
-        toks, key=lambda tok: int(tok.misc.split('|')[-1].split('=')[-1]))
-
-
-def gen_result_lines(sen_id, sen, ids):
-    words = " ".join(tok.word for tok in orig_order(sen))
-    yield f"# {sen_id}: {words}"
-    if ids is None:
-        yield f"# no parse for sentence {sen_id}"
-        yield "\n"
-        return
-
-    old_id_to_tok = {tok.id: tok for tok in sen}
-    tok_to_new_id = {tok: ids.index(tok.id) for tok in sen}
-    for new_id, tok in enumerate(
-            sorted(sen, key=lambda t: tok_to_new_id[t])):
-        if tok.head == 0:
-            head_id = 0
-        else:
-            head_tok = old_id_to_tok[tok.head]
-            head_id = tok_to_new_id[head_tok] + 1
-
-        new_tok = Token(
-            new_id+1, tok.lemma, tok.word, tok.pos, tok.tpos, tok.misc,
-            head_id, tok.deprel, tok.comp_edge, tok.space_after,
-            tok.word_id)
-
-        yield "\t".join(str(f) for f in new_tok)
-    yield "\n"
+        toks, key=lambda tok: int(tok.feats.split('|')[-1].split('=')[-1]))
 
 
 def main():
@@ -121,12 +100,18 @@ def main():
     assert os.path.isdir(args.gen_dir)
     grammar = GrammarClient(f"{args.host}:{args.port}")
     with open(args.output_file, "w") as f:
-        for i, sen in enumerate(
-                gen_conll_sens_from_file(args.test_file, swaps=((1,2)))):
-            print(f'processing sentence {i}...')
-            for sen_id, pred_ids in enumerate(
-                    surface_realization(sen, i, grammar, args)):
-                f.write("\n".join(gen_result_lines(sen_id, sen, pred_ids)))
+        for sen_id, sen in enumerate(
+                gen_conll_sens_from_file(args.test_file, swaps=((1, 2),))):
+            print(f'processing sentence {sen_id}...')
+            pred_ids = surface_realization(sen, sen_id, grammar, args)
+            if pred_ids is None:
+                message = f"no parse for sentence {sen_id}"
+                print(message)
+                f.write(f"# {message}\n".upper())
+
+            out_sen = reorder_sentence(sen, pred_ids)
+            f.write(print_conll_sen(out_sen, sen_id))
+            f.write('\n')
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import sys
 from collections import defaultdict
 from itertools import chain, combinations
 
-from stanza.models.common.doc import Document
+from stanza.models.common.doc import Document as StanzaDocument
 from stanza.utils.conll import CoNLL
 
 
@@ -108,7 +108,7 @@ def gen_tsv_sens(stream, swaps=()):
 def gen_conll_sens(stream, swaps=()):
     for sen in gen_tsv_sens(stream, swaps):
         dic = CoNLL.convert_conll([sen])
-        yield Document(dic).sentences[0]
+        yield StanzaDocument(dic).sentences[0]
 
 
 def gen_conll_sens_from_file(fn, swaps=()):
@@ -116,26 +116,25 @@ def gen_conll_sens_from_file(fn, swaps=()):
         yield from gen_conll_sens(f, swaps)
 
 
-def print_conll_sen(sen):
-    out = ''
-    d = sen.to_dict()
-    for fields in CoNLL.convert_dict([d])[0]:
+def print_conll_sen(sen, sent_id=None):
+    out = f'# sent_id = {sent_id}\n# text = {sen.text}\n'
+    for fields in CoNLL.convert_dict([sen.to_dict()])[0]:
         out += "\t".join(fields) + '\n'
     return out
 
 
 def get_graph(sen, word_to_id):
-    graph = defaultdict(lambda: {"deps": {}})
+    graph = defaultdict(lambda: {"mor": "", "deps": {}})
     for tok in sen.words:
-        graph[tok.id] = {
+        graph[tok.id].update({
             "word": word_to_id[tok.lemma.lower()],
             # calling upos tree_pos for backward compatibility
             "tree_pos": sanitize_word(tok.upos),
-            "mor": tok.misc}
+            "mor": tok.feats})
 
-        if tok.head != 0:
-            graph[tok.head]['deps'][tok.id] = tok.deprel
-        else:
+        graph[tok.head]['deps'][tok.id] = tok.deprel
+
+        if tok.head == 0:
             root_id = tok.id
 
     return graph, root_id
@@ -176,10 +175,10 @@ def get_rules(graph):
             to_pos = graph[dep]["tree_pos"]
             word = graph[dep]["word"].lower()
             mor = graph[dep]["mor"]
-
             if "tree_pos" in graph[w]:
                 lin_dir = (
-                    "S" if "lin=+" in mor else "B" if "lin=-" in mor else None)
+                    "S" if "lin=+" in mor else (
+                        "B" if "lin=-" in mor else None))
 
                 subgraphs["graph"].append({
                     "to": (word.lower(), to_pos),
@@ -187,6 +186,22 @@ def get_rules(graph):
                     "dir": lin_dir})
 
         rules.append(subgraphs)
+    return rules
+
+
+def reorder_sentence(sen, ids):
+    if ids is None:
+        return sen
+    new_ids = {tok.id: ids.index(tok.id) + 1 for tok in sen.words}
+    tok_dicts = sen.to_dict()
+    for tok in tok_dicts:
+        tok['id'] = new_ids[tok['id']]
+        if tok['head'] != 0:
+            tok['head'] = new_ids[tok['head']]
+
+    tok_dicts.sort(key=lambda t: t['id'])
+    doc = StanzaDocument([tok_dicts])
+    return doc.sentences[0]
 
 
 def test():

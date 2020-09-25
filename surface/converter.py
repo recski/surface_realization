@@ -287,6 +287,14 @@ def convert(conll_file, word_to_id):
     return id_to_graph, id_to_sentences, id_to_idgraph
 
 
+def make_default_structure(graph_data, word_id):
+    if word_id not in graph_data:
+        graph_data[word_id] = {
+            "word": "",
+            "deps": {},
+        }
+
+
 def main():
     args = get_args()
     convert(args.conll_file)
