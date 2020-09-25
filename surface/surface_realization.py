@@ -10,8 +10,21 @@ from surface.utils import (
     get_ids_from_parse,
     get_isi_sgraph,
     get_rules,
+    merge_sens,
     print_conll_sen,
-    reorder_sentence)
+    reorder_sentence,
+    split_sen_on_edges)
+
+
+RECURSIVE = True
+
+SPLIT_EDGES = {
+    "acl",
+    "advcl",
+    "ccomp",
+    "xcomp",
+    "conj"
+}
 
 
 def get_args():
@@ -45,10 +58,10 @@ def get_alto_command(timeout, input_fn, grammar_fn, output_fn):
         '-o', output_fn]
 
 
-def surface_realization(sen, i, grammar, args):
+def predict_word_order(sen, i, root_id, grammar, args):
     """expects stanza Sentence, surface.Grammar, args"""
 
-    graph, root_id = get_graph(sen, grammar.word_to_id)
+    graph = get_graph(sen, grammar.word_to_id)
     isi_sgraph = get_isi_sgraph(graph, root_id)
     rules = get_rules(graph)
 
@@ -95,6 +108,52 @@ def orig_order(toks):
         toks, key=lambda tok: int(tok.feats.split('|')[-1].split('=')[-1]))
 
 
+def one_step_surface_realization(
+        sen, sen_id, root_id, grammar, args, keep_ids=False):
+    pred_ids = predict_word_order(sen, sen_id, root_id, grammar, args)
+    out_sen = reorder_sentence(sen, pred_ids, keep_ids)
+    return out_sen
+
+
+def rec_surface_realization(sen, sen_id, root_head, grammar, args):
+    top_sen, root_id, subsens = split_sen_on_edges(sen, root_head, SPLIT_EDGES)
+
+    print('split results:')
+    print('top_sen:', [(tok.id, tok.text) for tok in top_sen.words])
+    for i, (subsen, s_root_id) in enumerate(subsens):
+        print(
+            f'subsen {i}, children of #{s_root_id}:',
+            [(tok.id, tok.text) for tok in subsen.words])
+
+    if len(subsens) == 1:
+        print('no real split, running single step SR')
+        return one_step_surface_realization(
+            sen, sen_id, root_id, grammar, args, keep_ids=True)
+
+    reordered_top_sen = one_step_surface_realization(
+        top_sen, sen_id, root_id, grammar, args, keep_ids=True)
+
+    reordered_subsens = []
+    for i, (subsen, s_root_id) in enumerate(subsens):
+        subsen_id = f"{sen_id}_{i}"
+        reordered_subsen = rec_surface_realization(
+            subsen, subsen_id, s_root_id, grammar, args)
+        reordered_subsens.append((reordered_subsen, s_root_id))
+
+    for psen in [reordered_top_sen] + [ss for ss, _ in reordered_subsens]:
+        print(print_conll_sen(psen, sen_id))
+
+    reordered_sen = merge_sens(reordered_top_sen, reordered_subsens)
+
+    return reordered_sen
+
+
+def surface_realization(sen, sen_id, grammar, args):
+    if RECURSIVE:
+        return rec_surface_realization(sen, sen_id, 0, grammar, args)
+    return one_step_surface_realization(sen, sen_id, grammar, args)
+
+
 def main():
     args = get_args()
     assert os.path.isdir(args.gen_dir)
@@ -103,13 +162,8 @@ def main():
         for sen_id, sen in enumerate(
                 gen_conll_sens_from_file(args.test_file, swaps=((1, 2),))):
             print(f'processing sentence {sen_id}...')
-            pred_ids = surface_realization(sen, sen_id, grammar, args)
-            if pred_ids is None:
-                message = f"no parse for sentence {sen_id}"
-                print(message)
-                f.write(f"# {message}\n".upper())
+            out_sen = surface_realization(sen, sen_id, grammar, args)
 
-            out_sen = reorder_sentence(sen, pred_ids)
             f.write(print_conll_sen(out_sen, sen_id))
             f.write('\n')
 

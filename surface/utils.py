@@ -134,10 +134,7 @@ def get_graph(sen, word_to_id):
 
         graph[tok.head]['deps'][tok.id] = tok.deprel
 
-        if tok.head == 0:
-            root_id = tok.id
-
-    return graph, root_id
+    return graph
 
 
 def get_isi_sgraph(graph, word_id):
@@ -189,19 +186,79 @@ def get_rules(graph):
     return rules
 
 
-def reorder_sentence(sen, ids):
+def reorder_sentence(sen, ids, keep_ids):
     if ids is None:
         return sen
     new_ids = {tok.id: ids.index(tok.id) + 1 for tok in sen.words}
     tok_dicts = sen.to_dict()
-    for tok in tok_dicts:
-        tok['id'] = new_ids[tok['id']]
-        if tok['head'] != 0:
-            tok['head'] = new_ids[tok['head']]
+    tok_dicts.sort(key=lambda t: new_ids[t['id']])
+    if not keep_ids:
+        for tok in tok_dicts:
+            tok['id'] = new_ids[tok['id']]
+            if tok['head'] != 0:
+                tok['head'] = new_ids[tok['head']]
 
-    tok_dicts.sort(key=lambda t: t['id'])
     doc = StanzaDocument([tok_dicts])
     return doc.sentences[0]
+
+
+def get_subsen(toks, root):
+    """works with tok dicts"""
+    ids = set([root['id']])
+    while True:
+        n = len(ids)
+        for tok in toks:
+            if tok['id'] in ids:
+                continue
+            if tok['head'] in ids:
+                ids.add(tok['id'])
+        if len(ids) == n:
+            break
+
+    return [tok for tok in toks if tok['id'] in ids]
+
+
+def split_sen_on_edges(sen, root_head, edges):
+    print('splitting this:', [(tok.id, tok.text) for tok in sen.words])
+    print('root_head:', root_head)
+    toks = sen.to_dict()
+    root_toks = [tok for tok in toks if tok['head'] == root_head]
+    assert len(root_toks) == 1, root_toks
+    root_tok = root_toks[0]
+    root_id = root_tok['id']
+
+    children = [tok for tok in toks if tok['head'] == root_id]
+    top_sen = [root_tok]
+    subsens = []
+    main_subsen = [root_tok]
+    for child in children:
+        subsen = get_subsen(toks, child)
+        if child['deprel'] in edges:
+            subsens.append((subsen, root_id))
+            top_sen.append(child)
+        else:
+            main_subsen += subsen
+    subsens.append((main_subsen, root_head))
+
+    top_sen = StanzaDocument([top_sen]).sentences[0]
+    subsens = [
+        (StanzaDocument([subsen]).sentences[0], s_root_id)
+        for subsen, s_root_id in subsens]
+    return top_sen, root_id, subsens
+
+
+def merge_sens(reordered_top_sen, reordered_subsens):
+    toks = []
+    ids_to_subsens = {
+        s_root_id: subsen.to_dict() for subsen, s_root_id in reordered_subsens}
+
+    for tok in reordered_top_sen.to_dict():
+        if tok['id'] in ids_to_subsens:
+            toks += ids_to_subsens[tok['id']]
+        else:
+            toks.append(tok)
+
+    return StanzaDocument([toks]).sentences[0]
 
 
 def test():
