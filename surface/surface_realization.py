@@ -1,6 +1,9 @@
 import argparse
+import logging
 import os
 import subprocess
+
+from stanza.models.common.doc import Document as StanzaDocument
 
 from surface.grammar import GrammarClient
 from surface.utils import (
@@ -13,7 +16,9 @@ from surface.utils import (
     merge_sens,
     print_conll_sen,
     reorder_sentence,
-    split_sen_on_edges)
+    split_sen_on_edges,
+    words
+)
 
 
 RECURSIVE = True
@@ -116,45 +121,58 @@ def one_step_surface_realization(
 
 
 def rec_surface_realization(sen, sen_id, root_head, grammar, args):
+    logging.debug(f'*** {sen_id} ***')
+    logging.debug(words(sen))
+    logging.debug('******')
     top_sen, root_id, subsens = split_sen_on_edges(sen, root_head, SPLIT_EDGES)
 
-    print('split results:')
-    print('top_sen:', [(tok.id, tok.text) for tok in top_sen.words])
-    for i, (subsen, s_root_id) in enumerate(subsens):
-        print(
-            f'subsen {i}, children of #{s_root_id}:',
-            [(tok.id, tok.text) for tok in subsen.words])
-
     if len(subsens) == 1:
-        print('no real split, running single step SR')
-        return one_step_surface_realization(
+        logging.debug('no real split, running single step SR')
+        reordered_sen = one_step_surface_realization(
             sen, sen_id, root_id, grammar, args, keep_ids=True)
+        return reordered_sen, root_id
+
+    logging.debug('split results:')
+    logging.debug('{0} {1}'.format('top_sen:', words(top_sen)))
+    for i, (subsen, s_root_id) in enumerate(subsens):
+        logging.debug('subsen {0}, children of #{1}: {2}'.format(
+            i, s_root_id, words(subsen)))
 
     reordered_top_sen = one_step_surface_realization(
         top_sen, sen_id, root_id, grammar, args, keep_ids=True)
 
     reordered_subsens = []
-    for i, (subsen, s_root_id) in enumerate(subsens):
+    for i, (subsen, s_root_head) in enumerate(subsens):
         subsen_id = f"{sen_id}_{i}"
-        reordered_subsen = rec_surface_realization(
-            subsen, subsen_id, s_root_id, grammar, args)
+        reordered_subsen, s_root_id = rec_surface_realization(
+            subsen, subsen_id, s_root_head, grammar, args)
         reordered_subsens.append((reordered_subsen, s_root_id))
-
-    for psen in [reordered_top_sen] + [ss for ss, _ in reordered_subsens]:
-        print(print_conll_sen(psen, sen_id))
 
     reordered_sen = merge_sens(reordered_top_sen, reordered_subsens)
 
-    return reordered_sen
+    logging.debug('merged sen: {}'.format(words(reordered_sen)))
+
+    return reordered_sen, root_id
 
 
 def surface_realization(sen, sen_id, grammar, args):
+    toks = sen.to_dict()
     if RECURSIVE:
-        return rec_surface_realization(sen, sen_id, 0, grammar, args)
-    return one_step_surface_realization(sen, sen_id, grammar, args)
+        reordered_sen, _ = rec_surface_realization(
+            toks, sen_id, 0, grammar, args)
+    else:
+        reordered_sen = one_step_surface_realization(
+            toks, sen_id, grammar, args)
+
+    return StanzaDocument([reordered_sen]).sentences[0]
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s : " +
+        "%(module)s (%(lineno)s) - %(levelname)s - %(message)s")
+
     args = get_args()
     assert os.path.isdir(args.gen_dir)
     grammar = GrammarClient(f"{args.host}:{args.port}")
